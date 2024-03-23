@@ -2,11 +2,33 @@ import { makeExecutableSchema } from "@graphql-tools/schema";
 import { ApolloServer, gql } from "apollo-server-express";
 import express from "express";
 import { execute, subscribe } from "graphql";
+import { composeWithMongoose } from "graphql-compose-mongoose";
 import { PubSub } from "graphql-subscriptions";
 import { createServer } from "http";
+import mongoose from "mongoose";
 import { SubscriptionServer } from "subscriptions-transport-ws";
 import { v4 } from "uuid";
+
 (async () => {
+  // Connect to MongoDB locally
+  await mongoose.connect("mongodb://localhost:27017/graph", {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  });
+
+  // Define MongoDB Schema
+  const MessageSchema = new mongoose.Schema({
+    id: String,
+    name: String,
+    content: String,
+  });
+
+  // Create MongoDB Model
+  const MessageModel = mongoose.model("Message", MessageSchema);
+
+  // Integrate mongoose with GraphQL schema
+  const MessageTC = composeWithMongoose(MessageModel, {});
+
   const pubsub = new PubSub();
   const app = express();
   const httpServer = createServer(app);
@@ -32,67 +54,33 @@ import { v4 } from "uuid";
     }
   `;
 
-  let messages = [];
-
   const resolvers = {
     Query: {
-      viewMessages() {
-        return messages;
-      },
-      getMessage: (parent, { id }) => {
-        return messages.find((message) => message.id === id);
-      },
+      viewMessages: () => MessageModel.find(),
+      getMessage: (_, { id }) => MessageModel.findById(id),
     },
     Mutation: {
-      sendMessage: (parent, { name, content }) => {
+      sendMessage: (_, { name, content }) => {
         const id = v4();
-        const newMessage = {
-          id,
-          name,
-          content,
-        };
-        messages.push(newMessage);
-        pubsub.publish("MessageService", { receiveMessage: newMessage });
-        pubsub.publish(`MessageForUser:${name}`, {
-          receiveMessageForUser: newMessage,
-        });
-        return newMessage;
+        const newMessage = new MessageModel({ id, name, content });
+        return newMessage.save();
       },
-      updateMessage: (parent, { id, content }) => {
-        const index = messages.findIndex((message) => message.id === id);
-        if (index === -1) {
-          throw new Error("Message not found");
-        }
-        messages[index].content = content;
-        pubsub.publish("MessageService", { receiveMessage: messages[index] });
-        return messages[index];
-      },
-      deleteMessage: (parent, { id }) => {
-        const index = messages.findIndex((message) => message.id === id);
-        if (index === -1) {
-          throw new Error("Message not found");
-        }
-        const deletedId = messages[index].id;
-        messages = messages.filter((message) => message.id !== id);
-        return deletedId;
-      },
+      updateMessage: (_, { id, content }) =>
+        MessageModel.findByIdAndUpdate(id, { content }),
+      deleteMessage: (_, { id }) => MessageModel.findByIdAndRemove(id),
     },
     Subscription: {
       receiveMessage: {
         subscribe: () => pubsub.asyncIterator(["MessageService"]),
       },
-      receiveMessageForUser: {
-        subscribe: (_parent, { name }) =>
-          pubsub.asyncIterator([`MessageForUser:${name}`]),
-      },
     },
   };
 
   const schema = makeExecutableSchema({ typeDefs, resolvers });
-
   const server = new ApolloServer({
     schema,
   });
+
   await server.start();
   server.applyMiddleware({ app });
 
