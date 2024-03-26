@@ -22,10 +22,8 @@ import { v4 } from "uuid";
     name: String,
     content: String,
   });
-
   // Create MongoDB Model
   const MessageModel = mongoose.model("Message", MessageSchema);
-
   // Integrate mongoose with GraphQL schema
   const MessageTC = composeWithMongoose(MessageModel, {});
 
@@ -56,18 +54,37 @@ import { v4 } from "uuid";
 
   const resolvers = {
     Query: {
-      viewMessages: () => MessageModel.find(),
+      viewMessages: async () => {
+        try {
+          const messages = await MessageModel.find();
+          return messages;
+        } catch (error) {
+          throw new Error("Failed to fetch messages");
+        }
+      },
       getMessage: (_, { id }) => MessageModel.findById(id),
     },
     Mutation: {
       sendMessage: (_, { name, content }) => {
         const id = v4();
         const newMessage = new MessageModel({ id, name, content });
+        pubsub.publish("MessageService", { receiveMessage: newMessage });
         return newMessage.save();
       },
       updateMessage: (_, { id, content }) =>
         MessageModel.findByIdAndUpdate(id, { content }),
-      deleteMessage: (_, { id }) => MessageModel.findByIdAndRemove(id),
+      deleteMessage: async (_, { id }) => {
+        try {
+          const deletedMessage = await MessageModel.deleteOne({ id: id });
+          if (!deletedMessage) {
+            throw new Error("Message not found");
+          }
+          return id;
+        } catch (error) {
+          console.error("Failed to delete message:", error);
+          throw new Error("Failed to delete message");
+        }
+      },
     },
     Subscription: {
       receiveMessage: {
@@ -80,7 +97,6 @@ import { v4 } from "uuid";
   const server = new ApolloServer({
     schema,
   });
-
   await server.start();
   server.applyMiddleware({ app });
 
