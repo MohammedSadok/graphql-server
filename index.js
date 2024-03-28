@@ -38,7 +38,7 @@ import { v4 } from "uuid";
     }
     type Mutation {
       sendMessage(name: String!, content: String!): Message!
-      updateMessage(id: ID!, content: String!): Message
+      updateMessage(id: ID!, content: String!, name: String!): Message
       deleteMessage(id: ID!): ID
     }
     type Subscription {
@@ -71,11 +71,25 @@ import { v4 } from "uuid";
         pubsub.publish("MessageService", { receiveMessage: newMessage });
         return newMessage.save();
       },
-      updateMessage: (_, { id, content }) =>
-        MessageModel.findByIdAndUpdate(id, { content }),
+      updateMessage: async (_, { id, content, name }) => {
+        try {
+          await MessageModel.updateOne(
+            { id: id },
+            { $set: { content: content, name: name } }
+          );
+          const updatedMessage = await MessageModel.findOne({ id: id });
+          if (!updatedMessage) {
+            throw new Error("Message not found after update");
+          }
+          return updatedMessage;
+        } catch (error) {
+          console.error("Failed to update message:", error);
+          throw new Error("Failed to update message");
+        }
+      },
       deleteMessage: async (_, { id }) => {
         try {
-          const deletedMessage = await MessageModel.deleteOne({ id: id });
+          const deletedMessage = await MessageModel.deleteOne({ _id: id });
           if (!deletedMessage) {
             throw new Error("Message not found");
           }
